@@ -16,20 +16,25 @@ function criarDominos() {
     return pecas.sort(() => Math.random() - 0.5);
 }
 
+// Função auxiliar para ver se o jogador tem alguma peça que serve na mesa
+function temPecaQueServe(mao, mesa) {
+    if (mesa.length === 0) return true;
+    const pEsq = mesa[0][0];
+    const pDir = mesa[mesa.length - 1][1];
+    return mao.some(p => p[0] === pEsq || p[1] === pEsq || p[0] === pDir || p[1] === pDir);
+}
+
 function iniciarPartida(salaNome) {
     const s = salas[salaNome];
     if (!s || s.rodando) return;
-    
     s.rodando = true;
     s.monte = criarDominos();
     s.mesa = [];
     s.turno = 0;
-    
     s.jogadores.forEach(p => {
         p.mao = s.monte.splice(0, 7);
         io.to(p.id).emit('atualizarMao', p.mao);
     });
-    
     io.to(salaNome).emit('estadoLobby', { rodando: true, jogadoresInfo: s.jogadores });
     io.to(salaNome).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     io.to(salaNome).emit('atualizarMonte', s.monte.length);
@@ -41,23 +46,13 @@ io.on('connection', (socket) => {
     socket.on('entrarSala', ({ apelido, sala }) => {
         minhaSala = sala;
         socket.join(sala);
-        if (!salas[sala]) {
-            salas[sala] = { jogadores: [], mesa: [], monte: [], turno: 0, rodando: false };
-        }
+        if (!salas[sala]) salas[sala] = { jogadores: [], mesa: [], monte: [], turno: 0, rodando: false };
         const s = salas[sala];
-        
-        // Evita duplicados na lista se o aluno atualizar a página
-        const jaExiste = s.jogadores.find(p => p.id === socket.id);
-        if (!jaExiste) {
+        if (!s.jogadores.find(p => p.id === socket.id)) {
             s.jogadores.push({ id: socket.id, nome: apelido, pronto: false, mao: [] });
         }
-
         io.to(sala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
-        
-        // Regra de 4: Se atingir 4 jogadores, inicia automático
-        if (s.jogadores.length === 4) {
-            iniciarPartida(sala);
-        }
+        if (s.jogadores.length === 4) iniciarPartida(sala);
     });
 
     socket.on('marcarPronto', () => {
@@ -65,15 +60,8 @@ io.on('connection', (socket) => {
         if (!s) return;
         const j = s.jogadores.find(p => p.id === socket.id);
         if (j) j.pronto = true;
-
-        const todosProntos = s.jogadores.every(p => p.pronto);
-        
-        // Inicia se tiver pelo menos 2 e todos clicarem em pronto
-        if (s.jogadores.length >= 2 && todosProntos) {
-            iniciarPartida(minhaSala);
-        } else {
-            io.to(minhaSala).emit('estadoLobby', { rodando: false, jogadoresInfo: s.jogadores });
-        }
+        if (s.jogadores.length >= 2 && s.jogadores.every(p => p.pronto)) iniciarPartida(minhaSala);
+        else io.to(minhaSala).emit('estadoLobby', { rodando: false, jogadoresInfo: s.jogadores });
     });
 
     socket.on('jogarPeca', ({ index, lado }) => {
@@ -89,12 +77,16 @@ io.on('connection', (socket) => {
         } else {
             let pEsq = s.mesa[0][0];
             let pDir = s.mesa[s.mesa.length - 1][1];
+
+            // Lógica de encaixe corrigida (evita 6|6 com 3|3)
             if (lado === 'dir') {
                 if (peca[0] === pDir) s.mesa.push(peca);
-                else s.mesa.push(peca.reverse());
+                else if (peca[1] === pDir) s.mesa.push(peca.reverse());
+                else return socket.emit('erro', "A peça não serve na direita!");
             } else {
                 if (peca[1] === pEsq) s.mesa.unshift(peca);
-                else s.mesa.unshift(peca.reverse());
+                else if (peca[0] === pEsq) s.mesa.unshift(peca.reverse());
+                else return socket.emit('erro', "A peça não serve na esquerda!");
             }
         }
 
@@ -116,6 +108,12 @@ io.on('connection', (socket) => {
         if (!s || s.monte.length === 0) return;
         const j = s.jogadores.find(p => p.id === socket.id);
         if (s.jogadores.indexOf(j) !== s.turno) return;
+
+        // REGRA: Só compra se não tiver nenhuma peça que serve
+        if (temPecaQueServe(j.mao, s.mesa)) {
+            return socket.emit('erro', "Você tem peças que servem! Jogue uma delas.");
+        }
+
         j.mao.push(s.monte.pop());
         socket.emit('atualizarMao', j.mao);
         io.to(minhaSala).emit('atualizarMonte', s.monte.length);
@@ -123,7 +121,14 @@ io.on('connection', (socket) => {
 
     socket.on('passarVez', () => {
         const s = salas[minhaSala];
-        if (!s || s.turno !== s.jogadores.findIndex(p => p.id === socket.id)) return;
+        const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
+        if (!s || s.turno !== jIdx) return;
+        
+        // REGRA: Só passa se o monte estiver vazio E não tiver peça que serve
+        if (s.monte.length > 0 || temPecaQueServe(s.jogadores[jIdx].mao, s.mesa)) {
+            return socket.emit('erro', "Você não pode passar agora!");
+        }
+
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
