@@ -16,6 +16,25 @@ function criarDominos() {
     return pecas.sort(() => Math.random() - 0.5);
 }
 
+function iniciarPartida(salaNome) {
+    const s = salas[salaNome];
+    if (!s || s.rodando) return;
+    
+    s.rodando = true;
+    s.monte = criarDominos();
+    s.mesa = [];
+    s.turno = 0;
+    
+    s.jogadores.forEach(p => {
+        p.mao = s.monte.splice(0, 7);
+        io.to(p.id).emit('atualizarMao', p.mao);
+    });
+    
+    io.to(salaNome).emit('estadoLobby', { rodando: true, jogadoresInfo: s.jogadores });
+    io.to(salaNome).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
+    io.to(salaNome).emit('atualizarMonte', s.monte.length);
+}
+
 io.on('connection', (socket) => {
     let minhaSala = null;
 
@@ -26,8 +45,19 @@ io.on('connection', (socket) => {
             salas[sala] = { jogadores: [], mesa: [], monte: [], turno: 0, rodando: false };
         }
         const s = salas[sala];
-        s.jogadores.push({ id: socket.id, nome: apelido, pronto: false, mao: [] });
+        
+        // Evita duplicados na lista se o aluno atualizar a página
+        const jaExiste = s.jogadores.find(p => p.id === socket.id);
+        if (!jaExiste) {
+            s.jogadores.push({ id: socket.id, nome: apelido, pronto: false, mao: [] });
+        }
+
         io.to(sala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
+        
+        // Regra de 4: Se atingir 4 jogadores, inicia automático
+        if (s.jogadores.length === 4) {
+            iniciarPartida(sala);
+        }
     });
 
     socket.on('marcarPronto', () => {
@@ -36,19 +66,14 @@ io.on('connection', (socket) => {
         const j = s.jogadores.find(p => p.id === socket.id);
         if (j) j.pronto = true;
 
-        if (s.jogadores.length >= 2 && s.jogadores.every(p => p.pronto)) {
-            s.rodando = true;
-            s.monte = criarDominos();
-            s.mesa = [];
-            s.turno = 0;
-            s.jogadores.forEach(p => {
-                p.mao = s.monte.splice(0, 7);
-                io.to(p.id).emit('atualizarMao', p.mao);
-            });
-            io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
-            io.to(minhaSala).emit('atualizarMonte', s.monte.length);
+        const todosProntos = s.jogadores.every(p => p.pronto);
+        
+        // Inicia se tiver pelo menos 2 e todos clicarem em pronto
+        if (s.jogadores.length >= 2 && todosProntos) {
+            iniciarPartida(minhaSala);
+        } else {
+            io.to(minhaSala).emit('estadoLobby', { rodando: false, jogadoresInfo: s.jogadores });
         }
-        io.to(minhaSala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
     });
 
     socket.on('jogarPeca', ({ index, lado }) => {
@@ -64,13 +89,12 @@ io.on('connection', (socket) => {
         } else {
             let pEsq = s.mesa[0][0];
             let pDir = s.mesa[s.mesa.length - 1][1];
-
             if (lado === 'dir') {
                 if (peca[0] === pDir) s.mesa.push(peca);
-                else if (peca[1] === pDir) s.mesa.push(peca.reverse());
+                else s.mesa.push(peca.reverse());
             } else {
                 if (peca[1] === pEsq) s.mesa.unshift(peca);
-                else if (peca[0] === pEsq) s.mesa.unshift(peca.reverse());
+                else s.mesa.unshift(peca.reverse());
             }
         }
 
