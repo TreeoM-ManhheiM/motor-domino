@@ -4,174 +4,113 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
 
-// NOVA CONFIGURAÇÃO DE CORS: Permite que o seu site conecte no motor
-const io = new Server(server, {
-    cors: {
-        origin: "*", 
-        methods: ["GET", "POST"]
-    }
-});
-
-// Resposta simples para quem acessar o link do Render direto
-app.get('/', (req, res) => res.send('🚀 Motor do Dominó Ativo e Rodando!'));
+// Estrutura para armazenar as salas: { "nomeDaSala": { jogadores: [], mesa: [], monte: [], turno: 0, rodando: false } }
+let salas = {};
 
 function criarDominos() {
     let pecas = [];
     for (let i = 0; i <= 6; i++) {
         for (let j = i; j <= 6; j++) pecas.push([i, j]);
     }
-    for (let i = pecas.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pecas[i], pecas[j]] = [pecas[j], pecas[i]];
-    }
+    pecas.sort(() => Math.random() - 0.5);
     return pecas;
 }
 
-let jogadores = []; // Guarda: { id, nome, pronto }
-let maos = {}; 
-let mesa = [];
-let monte = [];
-let turnoAtual = 0;
-let jogoRodando = false;
-
-function atualizarLobby() {
-    io.emit('estadoLobby', { 
-        rodando: jogoRodando, 
-        jogadoresInfo: jogadores.map(j => ({ id: j.id, nome: j.nome, pronto: j.pronto })) 
-    });
-}
-
-function iniciarJogo() {
-    if (jogoRodando) return;
-    jogoRodando = true;
-    mesa = [];
-    turnoAtual = 0;
-    
-    let pecasEmbaralhadas = criarDominos();
-
-    for (let i = 0; i < jogadores.length; i++) {
-        let id = jogadores[i].id;
-        maos[id] = pecasEmbaralhadas.splice(0, 7);
-        io.to(id).emit('inicioJogo', { 
-            minhaMao: maos[id], 
-            meuIndice: i,
-            listaNomes: jogadores.map(j => j.nome)
-        });
-    }
-    
-    monte = pecasEmbaralhadas;
-    
-    io.emit('atualizarMesa', mesa);
-    io.emit('atualizarMonte', monte.length);
-    io.emit('mudarTurno', { turno: turnoAtual, nome: jogadores[turnoAtual].nome });
-    io.emit('mensagemGeral', 'O jogo começou! Boa sorte.');
-    atualizarLobby();
-}
-
 io.on('connection', (socket) => {
-    
-    socket.on('entrarLobby', (apelido) => {
-        if (jogadores.length < 4 && !jogoRodando) {
-            jogadores.push({ id: socket.id, nome: apelido, pronto: false });
-            io.emit('mensagemGeral', `${apelido} entrou na sala!`);
-            atualizarLobby();
-            
-            if (jogadores.length === 4) iniciarJogo();
-        } else {
-            socket.emit('erroJogada', 'A sala está cheia ou o jogo já começou!');
+    let salaAtual = null;
+
+    socket.on('entrarSala', ({ apelido, sala }) => {
+        salaAtual = sala;
+        socket.join(sala);
+
+        if (!salas[sala]) {
+            salas[sala] = { jogadores: [], mesa: [], monte: [], turno: 0, rodando: false };
         }
+
+        const s = salas[sala];
+        if (s.rodando) return socket.emit('erroJogada', 'Esta sala já está em jogo.');
+        if (s.jogadores.length >= 4) return socket.emit('erroJogada', 'Sala cheia!');
+
+        s.jogadores.push({ id: socket.id, nome: apelido, pronto: false, mao: [] });
+        
+        io.to(sala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
+        socket.emit('mensagemGeral', `Bem-vindo à sala: ${sala}`);
     });
 
     socket.on('marcarPronto', () => {
-        let jogador = jogadores.find(j => j.id === socket.id);
-        if (jogador) {
-            jogador.pronto = true;
-            atualizarLobby();
+        const s = salas[salaAtual];
+        if (!s) return;
+        const j = s.jogadores.find(p => p.id === socket.id);
+        if (j) j.pronto = true;
 
-            if (jogadores.length >= 2 && jogadores.every(j => j.pronto)) {
-                iniciarJogo();
-            }
+        if (s.jogadores.length >= 2 && s.jogadores.every(p => p.pronto)) {
+            s.rodando = true;
+            s.monte = criarDominos();
+            s.mesa = [];
+            s.turno = 0;
+            s.jogadores.forEach(p => p.mao = s.monte.splice(0, 7));
+            
+            s.jogadores.forEach((p, i) => {
+                io.to(p.id).emit('inicioJogo', { meuIndice: i, listaNomes: s.jogadores.map(pl => pl.nome), minhaMao: p.mao });
+            });
+            io.to(salaAtual).emit('mudarTurno', { turno: s.turno, nome: s.jogadores[s.turno].nome });
+        }
+        io.to(salaAtual).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
+    });
+
+    socket.on('jogarPeca', (index) => {
+        const s = salas[salaAtual];
+        if (!s || !s.rodando) return;
+        const jIndice = s.jogadores.findIndex(p => p.id === socket.id);
+        if (jIndice !== s.turno) return socket.emit('erroJogada', 'Não é sua vez!');
+
+        let peca = s.jogadores[jIndice].mao[index];
+        if (s.mesa.length === 0) {
+            s.mesa.push(peca);
+        } else {
+            let pontaEsq = s.mesa[0][0];
+            let pontaDir = s.mesa[s.mesa.length - 1][1];
+
+            if (peca[0] === pontaDir) { s.mesa.push(peca); }
+            else if (peca[1] === pontaDir) { s.mesa.push(peca.reverse()); }
+            else if (peca[1] === pontaEsq) { s.mesa.unshift(peca); }
+            else if (peca[0] === pontaEsq) { s.mesa.unshift(peca.reverse()); }
+            else { return socket.emit('erroJogada', 'Peça não encaixa!'); }
+        }
+
+        s.jogadores[jIndice].mao.splice(index, 1);
+        socket.emit('atualizarMao', s.jogadores[jIndice].mao);
+        io.to(salaAtual).emit('atualizarMesa', s.mesa);
+
+        if (s.jogadores[jIndice].mao.length === 0) {
+            io.to(salaAtual).emit('mensagemGeral', `🏆 ${s.jogadores[jIndice].nome} VENCEU!`);
+            s.rodando = false;
+        } else {
+            s.turno = (s.turno + 1) % s.jogadores.length;
+            io.to(salaAtual).emit('mudarTurno', { turno: s.turno, nome: s.jogadores[s.turno].nome });
         }
     });
 
     socket.on('comprarPeca', () => {
-        let jogadorIndice = jogadores.findIndex(j => j.id === socket.id);
-        if (jogadorIndice !== turnoAtual) return socket.emit('erroJogada', 'Não é a sua vez!');
-        if (monte.length === 0) return socket.emit('erroJogada', 'O monte está vazio!');
-        
-        let pecaComprada = monte.pop();
-        maos[socket.id].push(pecaComprada);
-        
-        socket.emit('atualizarMao', maos[socket.id]);
-        io.emit('atualizarMonte', monte.length);
-        io.emit('mensagemGeral', `${jogadores[jogadorIndice].nome} comprou uma peça.`);
-    });
-
-    socket.on('jogarPeca', (indexDaPeca) => {
-        let jogadorIndice = jogadores.findIndex(j => j.id === socket.id);
-        if (jogadorIndice !== turnoAtual) return socket.emit('erroJogada', 'Calma aí! Não é a sua vez.');
-
-        let peca = maos[socket.id][indexDaPeca];
-        let jogadaValida = false;
-
-        if (mesa.length === 0) { mesa.push(peca); jogadaValida = true; }
-        else {
-            let pontaEsquerda = mesa[0][0], pontaDireita = mesa[mesa.length - 1][1];
-            if (peca[0] === pontaDireita) { mesa.push([peca[0], peca[1]]); jogadaValida = true; }
-            else if (peca[1] === pontaDireita) { mesa.push([peca[1], peca[0]]); jogadaValida = true; }
-            else if (peca[1] === pontaEsquerda) { mesa.unshift([peca[0], peca[1]]); jogadaValida = true; }
-            else if (peca[0] === pontaEsquerda) { mesa.unshift([peca[1], peca[0]]); jogadaValida = true; }
-        }
-
-        if (!jogadaValida) return socket.emit('erroJogada', 'Essa peça não encaixa!');
-
-        maos[socket.id].splice(indexDaPeca, 1);
-        socket.emit('atualizarMao', maos[socket.id]); 
-        io.emit('atualizarMesa', mesa);
-
-        if (maos[socket.id].length === 0) {
-            io.emit('mensagemGeral', `🎉 FIM DE JOGO! ${jogadores[jogadorIndice].nome.toUpperCase()} BATEU E VENCEU! 🎉`);
-            jogoRodando = false;
-            jogadores.forEach(j => j.pronto = false);
-            atualizarLobby();
-            return;
-        }
-
-        turnoAtual = (turnoAtual + 1) % jogadores.length;
-        io.emit('mudarTurno', { turno: turnoAtual, nome: jogadores[turnoAtual].nome });
-    });
-
-    socket.on('passarVez', () => {
-        let jogadorIndice = jogadores.findIndex(j => j.id === socket.id);
-        if (jogadorIndice === turnoAtual) {
-            if (monte.length > 0) return socket.emit('erroJogada', 'Ainda há peças no monte! Compre uma.');
-            turnoAtual = (turnoAtual + 1) % jogadores.length;
-            io.emit('mudarTurno', { turno: turnoAtual, nome: jogadores[turnoAtual].nome });
-            io.emit('mensagemGeral', `${jogadores[jogadorIndice].nome} não tinha peça e passou a vez.`);
-        }
+        const s = salas[salaAtual];
+        if (!s || s.monte.length === 0) return socket.emit('erroJogada', 'Monte vazio!');
+        const j = s.jogadores.find(p => p.id === socket.id);
+        j.mao.push(s.monte.pop());
+        socket.emit('atualizarMao', j.mao);
+        io.to(salaAtual).emit('atualizarMonte', s.monte.length);
     });
 
     socket.on('disconnect', () => {
-        let jogadorIndice = jogadores.findIndex(j => j.id === socket.id);
-        if (jogadorIndice !== -1) {
-            let nomeSaiu = jogadores[jogadorIndice].nome;
-            jogadores.splice(jogadorIndice, 1); 
-            
-            if (jogoRodando) {
-                io.emit('mensagemGeral', `🔴 ${nomeSaiu} caiu! A partida foi encerrada.`);
-                jogoRodando = false;
-                jogadores.forEach(j => j.pronto = false);
-            }
-            atualizarLobby();
-
-            if (!jogoRodando && jogadores.length >= 2 && jogadores.every(j => j.pronto)) {
-                iniciarJogo();
-            }
+        if (salaAtual && salas[salaAtual]) {
+            const s = salas[salaAtual];
+            s.jogadores = s.jogadores.filter(p => p.id !== socket.id);
+            if (s.jogadores.length === 0) delete salas[salaAtual];
+            else io.to(salaAtual).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
         }
     });
 });
 
-// NOVA PORTA: Para não dar erro no Render
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
