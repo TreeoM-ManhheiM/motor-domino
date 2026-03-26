@@ -16,7 +16,7 @@ function criarDominos() {
     return pecas.sort(() => Math.random() - 0.5);
 }
 
-// Função auxiliar para ver se o jogador tem alguma peça que serve na mesa
+// Verifica se o jogador possui alguma peça que encaixe na mesa
 function temPecaQueServe(mao, mesa) {
     if (mesa.length === 0) return true;
     const pEsq = mesa[0][0];
@@ -78,15 +78,15 @@ io.on('connection', (socket) => {
             let pEsq = s.mesa[0][0];
             let pDir = s.mesa[s.mesa.length - 1][1];
 
-            // Lógica de encaixe corrigida (evita 6|6 com 3|3)
+            // Validação rigorosa de encaixe
             if (lado === 'dir') {
                 if (peca[0] === pDir) s.mesa.push(peca);
                 else if (peca[1] === pDir) s.mesa.push(peca.reverse());
-                else return socket.emit('erro', "A peça não serve na direita!");
+                else return socket.emit('erro', "A peça não encaixa na direita!");
             } else {
                 if (peca[1] === pEsq) s.mesa.unshift(peca);
                 else if (peca[0] === pEsq) s.mesa.unshift(peca.reverse());
-                else return socket.emit('erro', "A peça não serve na esquerda!");
+                else return socket.emit('erro', "A peça não encaixa na esquerda!");
             }
         }
 
@@ -109,9 +109,9 @@ io.on('connection', (socket) => {
         const j = s.jogadores.find(p => p.id === socket.id);
         if (s.jogadores.indexOf(j) !== s.turno) return;
 
-        // REGRA: Só compra se não tiver nenhuma peça que serve
+        // REGRA: Se o jogador já tem peça que serve, ele NÃO pode comprar
         if (temPecaQueServe(j.mao, s.mesa)) {
-            return socket.emit('erro', "Você tem peças que servem! Jogue uma delas.");
+            return socket.emit('erro', "Você já tem uma peça que serve na mesa!");
         }
 
         j.mao.push(s.monte.pop());
@@ -124,9 +124,9 @@ io.on('connection', (socket) => {
         const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
         if (!s || s.turno !== jIdx) return;
         
-        // REGRA: Só passa se o monte estiver vazio E não tiver peça que serve
+        // REGRA: Só passa se o monte acabar E não tiver peça que sirva
         if (s.monte.length > 0 || temPecaQueServe(s.jogadores[jIdx].mao, s.mesa)) {
-            return socket.emit('erro', "Você não pode passar agora!");
+            return socket.emit('erro', "Você ainda pode comprar ou jogar!");
         }
 
         s.turno = (s.turno + 1) % s.jogadores.length;
