@@ -31,7 +31,6 @@ function iniciarPartida(salaNome) {
     s.mesa = [];
     s.turno = 0;
 
-    // Define duplas se houver 4 jogadores
     if (s.jogadores.length === 4) {
         s.jogadores[0].dupla = s.jogadores[2].nome;
         s.jogadores[2].dupla = s.jogadores[0].nome;
@@ -42,7 +41,6 @@ function iniciarPartida(salaNome) {
     s.jogadores.forEach(p => {
         p.mao = s.monte.splice(0, 7);
         io.to(p.id).emit('atualizarMao', p.mao);
-        // Envia informação da dupla para cada um
         io.to(p.id).emit('infoParceiro', p.dupla || "Sem dupla (1x1)");
     });
 
@@ -77,8 +75,9 @@ io.on('connection', (socket) => {
 
     socket.on('jogarPeca', ({ index, lado }) => {
         const s = salas[minhaSala];
+        if (!s || !s.rodando) return;
         const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
-        if (!s || s.turno !== jIdx) return;
+        if (s.turno !== jIdx) return;
 
         let jogador = s.jogadores[jIdx];
         let peca = [...jogador.mao[index]];
@@ -86,17 +85,15 @@ io.on('connection', (socket) => {
         if (s.mesa.length === 0) {
             s.mesa.push(peca);
         } else {
-            let pEsq = s.mesa[0][0];
-            let pDir = s.mesa[s.mesa.length - 1][1];
-
+            let pEsq = s.mesa[0][0], pDir = s.mesa[s.mesa.length - 1][1];
             if (lado === 'dir') {
                 if (peca[0] === pDir) s.mesa.push(peca);
                 else if (peca[1] === pDir) s.mesa.push(peca.reverse());
-                else return socket.emit('erro', "A peça não encaixa na direita!");
+                else return socket.emit('erro', "Não encaixa!");
             } else {
                 if (peca[1] === pEsq) s.mesa.unshift(peca);
                 else if (peca[0] === pEsq) s.mesa.unshift(peca.reverse());
-                else return socket.emit('erro', "A peça não encaixa na esquerda!");
+                else return socket.emit('erro', "Não encaixa!");
             }
         }
 
@@ -107,10 +104,24 @@ io.on('connection', (socket) => {
         if (jogador.mao.length === 0) {
             const vitoriaMsg = jogador.dupla ? `🏆 DUPLA ${jogador.nome} & ${jogador.dupla} VENCEU!` : `🏆 ${jogador.nome} VENCEU!`;
             io.to(minhaSala).emit('mensagemGeral', vitoriaMsg);
-            s.rodando = false;
+            
+            // AUTO-LIMPEZA: Reseta a sala após vitória para nova partida
+            delete salas[minhaSala]; 
+            io.to(minhaSala).emit('resetJogo');
         } else {
             s.turno = (s.turno + 1) % s.jogadores.length;
             io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
+        }
+    });
+
+    socket.on('disconnect', () => {
+        if (minhaSala && salas[minhaSala]) {
+            salas[minhaSala].jogadores = salas[minhaSala].jogadores.filter(p => p.id !== socket.id);
+            if (salas[minhaSala].jogadores.length === 0) {
+                delete salas[minhaSala]; // LIMPEZA: Sala vazia é removida
+            } else {
+                io.to(minhaSala).emit('estadoLobby', { rodando: salas[minhaSala].rodando, jogadoresInfo: salas[minhaSala].jogadores });
+            }
         }
     });
 
@@ -119,11 +130,7 @@ io.on('connection', (socket) => {
         if (!s || s.monte.length === 0) return;
         const j = s.jogadores.find(p => p.id === socket.id);
         if (s.jogadores.indexOf(j) !== s.turno) return;
-
-        if (temPecaQueServe(j.mao, s.mesa)) {
-            return socket.emit('erro', "Você já tem uma peça que serve!");
-        }
-
+        if (temPecaQueServe(j.mao, s.mesa)) return socket.emit('erro', "Você já tem peça que serve!");
         j.mao.push(s.monte.pop());
         socket.emit('atualizarMao', j.mao);
         io.to(minhaSala).emit('atualizarMonte', s.monte.length);
@@ -133,11 +140,7 @@ io.on('connection', (socket) => {
         const s = salas[minhaSala];
         const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
         if (!s || s.turno !== jIdx) return;
-        
-        if (s.monte.length > 0 || temPecaQueServe(s.jogadores[jIdx].mao, s.mesa)) {
-            return socket.emit('erro', "Ainda pode comprar ou jogar!");
-        }
-
+        if (s.monte.length > 0 || temPecaQueServe(s.jogadores[jIdx].mao, s.mesa)) return socket.emit('erro', "Não pode passar!");
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
