@@ -16,7 +16,6 @@ function criarDominos() {
     return pecas.sort(() => Math.random() - 0.5);
 }
 
-// Verifica se o jogador possui alguma peça que encaixe na mesa
 function temPecaQueServe(mao, mesa) {
     if (mesa.length === 0) return true;
     const pEsq = mesa[0][0];
@@ -31,10 +30,22 @@ function iniciarPartida(salaNome) {
     s.monte = criarDominos();
     s.mesa = [];
     s.turno = 0;
+
+    // Define duplas se houver 4 jogadores
+    if (s.jogadores.length === 4) {
+        s.jogadores[0].dupla = s.jogadores[2].nome;
+        s.jogadores[2].dupla = s.jogadores[0].nome;
+        s.jogadores[1].dupla = s.jogadores[3].nome;
+        s.jogadores[3].dupla = s.jogadores[1].nome;
+    }
+
     s.jogadores.forEach(p => {
         p.mao = s.monte.splice(0, 7);
         io.to(p.id).emit('atualizarMao', p.mao);
+        // Envia informação da dupla para cada um
+        io.to(p.id).emit('infoParceiro', p.dupla || "Sem dupla (1x1)");
     });
+
     io.to(salaNome).emit('estadoLobby', { rodando: true, jogadoresInfo: s.jogadores });
     io.to(salaNome).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     io.to(salaNome).emit('atualizarMonte', s.monte.length);
@@ -78,7 +89,6 @@ io.on('connection', (socket) => {
             let pEsq = s.mesa[0][0];
             let pDir = s.mesa[s.mesa.length - 1][1];
 
-            // Validação rigorosa de encaixe
             if (lado === 'dir') {
                 if (peca[0] === pDir) s.mesa.push(peca);
                 else if (peca[1] === pDir) s.mesa.push(peca.reverse());
@@ -95,7 +105,8 @@ io.on('connection', (socket) => {
         io.to(minhaSala).emit('atualizarMesa', s.mesa);
         
         if (jogador.mao.length === 0) {
-            io.to(minhaSala).emit('mensagemGeral', `🏆 ${jogador.nome} VENCEU!`);
+            const vitoriaMsg = jogador.dupla ? `🏆 DUPLA ${jogador.nome} & ${jogador.dupla} VENCEU!` : `🏆 ${jogador.nome} VENCEU!`;
+            io.to(minhaSala).emit('mensagemGeral', vitoriaMsg);
             s.rodando = false;
         } else {
             s.turno = (s.turno + 1) % s.jogadores.length;
@@ -109,9 +120,8 @@ io.on('connection', (socket) => {
         const j = s.jogadores.find(p => p.id === socket.id);
         if (s.jogadores.indexOf(j) !== s.turno) return;
 
-        // REGRA: Se o jogador já tem peça que serve, ele NÃO pode comprar
         if (temPecaQueServe(j.mao, s.mesa)) {
-            return socket.emit('erro', "Você já tem uma peça que serve na mesa!");
+            return socket.emit('erro', "Você já tem uma peça que serve!");
         }
 
         j.mao.push(s.monte.pop());
@@ -124,9 +134,8 @@ io.on('connection', (socket) => {
         const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
         if (!s || s.turno !== jIdx) return;
         
-        // REGRA: Só passa se o monte acabar E não tiver peça que sirva
         if (s.monte.length > 0 || temPecaQueServe(s.jogadores[jIdx].mao, s.mesa)) {
-            return socket.emit('erro', "Você ainda pode comprar ou jogar!");
+            return socket.emit('erro', "Ainda pode comprar ou jogar!");
         }
 
         s.turno = (s.turno + 1) % s.jogadores.length;
