@@ -4,20 +4,26 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+
+// CONFIGURAÇÃO DO CORS LIBERADA PARA O GITHUB PAGES E QUALQUER OUTRO DOMÍNIO
+const io = new Server(server, { 
+    cors: { 
+        origin: "*", 
+        methods: ["GET", "POST"] 
+    } 
+});
 
 // Serve os arquivos estáticos (HTML, CSS) da pasta atual
 app.use(express.static(__dirname));
 
 let salas = {};
 
-// Função para gerar as 28 peças do dominó com embaralhamento profissional (Fisher-Yates)
+// Função para gerar as 28 peças do dominó (Embaralhamento Profissional Fisher-Yates)
 function criarDominos() {
     let pecas = [];
     for (let i = 0; i <= 6; i++) {
         for (let j = i; j <= 6; j++) pecas.push([i, j]);
     }
-    // Embaralha as peças de forma justa
     for (let i = pecas.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pecas[i], pecas[j]] = [pecas[j], pecas[i]]; 
@@ -235,17 +241,14 @@ io.on('connection', (socket) => {
             s.jogadores = s.jogadores.filter(p => p.id !== socket.id);
 
             if (s.jogadores.length === 0) {
-                // Se a sala ficou vazia, apaga a sala
                 delete salas[minhaSala];
             } else if (s.rodando) {
-                // Se o jogo estava rodando, encerra a partida por abandono para evitar bugs
                 finalizarJogo(
                     minhaSala, 
                     "🚨 PARTIDA CANCELADA", 
                     `O jogador ${jogadorSaiu ? jogadorSaiu.nome : 'Desconhecido'} abandonou a partida.`
                 );
             } else {
-                // Se estava no lobby, só avisa quem ficou
                 io.to(minhaSala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
             }
         }
