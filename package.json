@@ -1,15 +1,19 @@
 {
   "name": "arena-domino",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Dominó Lógico Multiplayer da EE 8 de Abril",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "domino",
+    "multiplayer",
+    "socket.io"
+  ],
+  "author": "EE 8 de Abril",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
