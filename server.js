@@ -28,12 +28,16 @@ io.on('connection', (socket) => {
     socket.on('entrarSala', ({ apelido, sala }) => {
         socket.join(sala);
         minhaSala = sala;
+        
         if (!salas[sala]) {
-            salas[sala] = { jogadores: [], rodando: false, mesa: [], monte: [], turno: 0 };
+            // ADICIONADO: Contador "prontos: 0"
+            salas[sala] = { jogadores: [], rodando: false, mesa: [], monte: [], turno: 0, prontos: 0 };
         }
+        
         // Limite de 4 jogadores por sala
         if (salas[sala].jogadores.length < 4 && !salas[sala].rodando) {
-            salas[sala].jogadores.push({ id: socket.id, nome: apelido, mao: [] });
+            // ADICIONADO: Variável "pronto: false" para cada jogador
+            salas[sala].jogadores.push({ id: socket.id, nome: apelido, mao: [], pronto: false });
             io.to(sala).emit('estadoLobby', { rodando: false, jogadoresInfo: salas[sala].jogadores });
         }
     });
@@ -42,20 +46,31 @@ io.on('connection', (socket) => {
         const s = salas[minhaSala];
         if (!s || s.rodando) return;
         
-        s.rodando = true;
-        s.monte = criarDominos();
-        s.mesa = [];
-        s.turno = 0;
+        // Acha o jogador que clicou e checa se ele já não estava pronto
+        const jogador = s.jogadores.find(p => p.id === socket.id);
+        if (!jogador || jogador.pronto) return;
 
-        // Regra de Distribuição: 7 peças para cada (1x1, 1x1x1 ou 2x2)
-        s.jogadores.forEach(j => {
-            j.mao = s.monte.splice(0, 7);
-            io.to(j.id).emit('atualizarMao', j.mao);
-        });
+        // Marca que esse jogador confirmou e aumenta a contagem da sala
+        jogador.pronto = true;
+        s.prontos++;
 
-        io.to(minhaSala).emit('jogoIniciado');
-        io.to(minhaSala).emit('atualizarMesa', s.mesa);
-        io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
+        // SÓ INICIA SE TODO MUNDO DA SALA CONFIRMAR
+        if (s.prontos >= s.jogadores.length) {
+            s.rodando = true;
+            s.monte = criarDominos();
+            s.mesa = [];
+            s.turno = 0;
+
+            // Regra de Distribuição: 7 peças para cada
+            s.jogadores.forEach(j => {
+                j.mao = s.monte.splice(0, 7);
+                io.to(j.id).emit('atualizarMao', j.mao);
+            });
+
+            io.to(minhaSala).emit('jogoIniciado');
+            io.to(minhaSala).emit('atualizarMesa', s.mesa);
+            io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
+        }
     });
 
     socket.on('jogarPeca', ({ index, lado }) => {
@@ -121,8 +136,23 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         if (minhaSala && salas[minhaSala]) {
-            salas[minhaSala].jogadores = salas[minhaSala].jogadores.filter(p => p.id !== socket.id);
-            if (salas[minhaSala].jogadores.length === 0) delete salas[minhaSala];
+            const s = salas[minhaSala];
+            const jogadorSaiu = s.jogadores.find(p => p.id === socket.id);
+            
+            // Se o cara que saiu já tinha clicado em "Pronto", tira o voto dele pra não travar a sala
+            if (jogadorSaiu && jogadorSaiu.pronto && !s.rodando) {
+                s.prontos--;
+            }
+
+            // Remove o jogador da lista
+            s.jogadores = s.jogadores.filter(p => p.id !== socket.id);
+            
+            // Se a sala esvaziou, apaga a sala. Se ainda tem gente no lobby, atualiza a tela deles.
+            if (s.jogadores.length === 0) {
+                delete salas[minhaSala];
+            } else if (!s.rodando) {
+                io.to(minhaSala).emit('estadoLobby', { rodando: false, jogadoresInfo: s.jogadores });
+            }
         }
     });
 });
