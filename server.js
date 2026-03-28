@@ -30,13 +30,11 @@ io.on('connection', (socket) => {
         minhaSala = sala;
         
         if (!salas[sala]) {
-            // ADICIONADO: Contador "prontos: 0"
-            salas[sala] = { jogadores: [], rodando: false, mesa: [], monte: [], turno: 0, prontos: 0 };
+            // Adicionamos a variável 'passosSeguidos' para saber quando o jogo tranca
+            salas[sala] = { jogadores: [], rodando: false, mesa: [], monte: [], turno: 0, prontos: 0, passosSeguidos: 0 };
         }
         
-        // Limite de 4 jogadores por sala
         if (salas[sala].jogadores.length < 4 && !salas[sala].rodando) {
-            // ADICIONADO: Variável "pronto: false" para cada jogador
             salas[sala].jogadores.push({ id: socket.id, nome: apelido, mao: [], pronto: false });
             io.to(sala).emit('estadoLobby', { rodando: false, jogadoresInfo: salas[sala].jogadores });
         }
@@ -46,22 +44,19 @@ io.on('connection', (socket) => {
         const s = salas[minhaSala];
         if (!s || s.rodando) return;
         
-        // Acha o jogador que clicou e checa se ele já não estava pronto
         const jogador = s.jogadores.find(p => p.id === socket.id);
         if (!jogador || jogador.pronto) return;
 
-        // Marca que esse jogador confirmou e aumenta a contagem da sala
         jogador.pronto = true;
         s.prontos++;
 
-        // SÓ INICIA SE TODO MUNDO DA SALA CONFIRMAR
         if (s.prontos >= s.jogadores.length) {
             s.rodando = true;
             s.monte = criarDominos();
             s.mesa = [];
             s.turno = 0;
+            s.passosSeguidos = 0; // Zera a contagem de passos
 
-            // Regra de Distribuição: 7 peças para cada
             s.jogadores.forEach(j => {
                 j.mao = s.monte.splice(0, 7);
                 io.to(j.id).emit('atualizarMao', j.mao);
@@ -82,7 +77,6 @@ io.on('connection', (socket) => {
         let jogador = s.jogadores[jIdx];
         let peca = [...jogador.mao[index]];
 
-        // LÓGICA DE ENCAIXE E GIRO AUTOMÁTICO
         if (s.mesa.length === 0) {
             s.mesa.push(peca);
         } else {
@@ -99,12 +93,14 @@ io.on('connection', (socket) => {
             }
         }
 
-        // Remove a peça da mão e atualiza mesa
+        // Se alguém jogou uma peça, o jogo NÃO está trancado, então zeramos a contagem
+        s.passosSeguidos = 0;
+
         jogador.mao.splice(index, 1);
         socket.emit('atualizarMao', jogador.mao);
         io.to(minhaSala).emit('atualizarMesa', s.mesa);
 
-        // REGRA DE FINAL DE PARTIDA (BATIDA)
+        // REGRA DE BATIDA NORMAL
         if (jogador.mao.length === 0) {
             let resumo = s.jogadores.map(jog => `${jog.nome}: ${somarPontos(jog.mao)} pts`).join('\n');
             io.to(minhaSala).emit('mensagemGeral', `🏆 ${jogador.nome} BATEU!\n\nPontos restantes:\n${resumo}`);
@@ -112,7 +108,6 @@ io.on('connection', (socket) => {
             return io.to(minhaSala).emit('resetJogo');
         }
 
-        // Próximo turno
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
@@ -123,13 +118,53 @@ io.on('connection', (socket) => {
         const j = s.jogadores.find(p => p.id === socket.id);
         if (s.jogadores.indexOf(j) !== s.turno) return;
         
+        // Comprar também zera a contagem de trancamento, pois movimenta o jogo
+        s.passosSeguidos = 0;
+
         j.mao.push(s.monte.pop());
         socket.emit('atualizarMao', j.mao);
     });
 
     socket.on('passarVez', () => {
         const s = salas[minhaSala];
-        if (!s) return;
+        if (!s || !s.rodando) return;
+        
+        // Checa se é realmente a vez do jogador que apertou o botão
+        const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
+        if (s.turno !== jIdx) return;
+
+        // REGRA DO JOGO TRANCADO: Aumenta a contagem de pessoas que passaram a vez direto
+        s.passosSeguidos++;
+
+        // Se todo mundo da mesa passou a vez, o jogo TRANCOU!
+        if (s.passosSeguidos >= s.jogadores.length) {
+            let menorPonto = Infinity;
+            let vencedores = [];
+
+            // Calcula quem tem menos pontos
+            s.jogadores.forEach(jog => {
+                let pontos = somarPontos(jog.mao);
+                jog.pontosAtuais = pontos;
+                if (pontos < menorPonto) {
+                    menorPonto = pontos;
+                }
+            });
+
+            // Acha o nome de quem tem os menores pontos (pode dar empate)
+            s.jogadores.forEach(jog => {
+                if (jog.pontosAtuais === menorPonto) {
+                    vencedores.push(jog.nome);
+                }
+            });
+
+            let resumo = s.jogadores.map(jog => `${jog.nome}: ${jog.pontosAtuais} pts`).join('\n');
+            io.to(minhaSala).emit('mensagemGeral', `🔒 O JOGO TRANCOU!\n\nVencedor(es) com menos pontos: ${vencedores.join(', ')}\n\nResumo:\n${resumo}`);
+            
+            delete salas[minhaSala];
+            return io.to(minhaSala).emit('resetJogo');
+        }
+
+        // Se não trancou ainda, só passa a vez normalmente
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
@@ -139,15 +174,12 @@ io.on('connection', (socket) => {
             const s = salas[minhaSala];
             const jogadorSaiu = s.jogadores.find(p => p.id === socket.id);
             
-            // Se o cara que saiu já tinha clicado em "Pronto", tira o voto dele pra não travar a sala
             if (jogadorSaiu && jogadorSaiu.pronto && !s.rodando) {
                 s.prontos--;
             }
 
-            // Remove o jogador da lista
             s.jogadores = s.jogadores.filter(p => p.id !== socket.id);
             
-            // Se a sala esvaziou, apaga a sala. Se ainda tem gente no lobby, atualiza a tela deles.
             if (s.jogadores.length === 0) {
                 delete salas[minhaSala];
             } else if (!s.rodando) {
