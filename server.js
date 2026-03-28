@@ -11,13 +11,18 @@ app.use(express.static(__dirname));
 
 let salas = {};
 
-// Função para gerar as 28 peças do dominó
+// Função para gerar as 28 peças do dominó com embaralhamento profissional (Fisher-Yates)
 function criarDominos() {
     let pecas = [];
     for (let i = 0; i <= 6; i++) {
         for (let j = i; j <= 6; j++) pecas.push([i, j]);
     }
-    return pecas.sort(() => Math.random() - 0.5); // Embaralha as peças
+    // Embaralha as peças de forma justa
+    for (let i = pecas.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pecas[i], pecas[j]] = [pecas[j], pecas[i]]; 
+    }
+    return pecas;
 }
 
 // Verifica se existe alguma peça na mão que encaixa na mesa
@@ -28,18 +33,17 @@ function temPecaQueServe(mao, mesa) {
     return mao.some(p => p[0] === pEsq || p[1] === pEsq || p[0] === pDir || p[1] === pDir);
 }
 
-// NOVA REGRA: Calcula os pontos da mão de um jogador
+// Calcula os pontos da mão de um jogador
 function calcularPontos(mao) {
     return mao.reduce((total, peca) => total + peca[0] + peca[1], 0);
 }
 
-// NOVA REGRA: Finaliza o jogo, avisa a todos e reseta o lobby
+// Finaliza o jogo, avisa a todos e reseta o lobby
 function finalizarJogo(salaNome, motivo, mensagem) {
     const s = salas[salaNome];
     if (!s) return;
     io.to(salaNome).emit('fimDeJogo', { motivo, mensagem });
     s.rodando = false;
-    // Avisa todos para atualizar os botões do lobby
     io.to(salaNome).emit('estadoLobby', { rodando: false, jogadoresInfo: s.jogadores });
 }
 
@@ -143,7 +147,7 @@ io.on('connection', (socket) => {
         socket.emit('atualizarMao', j.mao);
         io.to(minhaSala).emit('atualizarJogadores', s.jogadores.map(p => ({ nome: p.nome, pecas: p.mao.length })));
 
-        // NOVA REGRA: CONDIÇÃO DE VITÓRIA POR BATIDA
+        // CONDIÇÃO DE VITÓRIA POR BATIDA
         if (j.mao.length === 0) {
             let msgVitoria = `${j.nome} bateu e venceu o jogo!`;
             if (s.jogadores.length === 4) {
@@ -186,7 +190,7 @@ io.on('connection', (socket) => {
 
         s.passesConsecutivos++;
 
-        // NOVA REGRA: CONDIÇÃO DE VITÓRIA POR JOGO TRANCADO
+        // CONDIÇÃO DE VITÓRIA POR JOGO TRANCADO
         if (s.passesConsecutivos >= s.jogadores.length) {
             let msgTrancado = "";
             
@@ -224,11 +228,25 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         if (minhaSala && salas[minhaSala]) {
-            salas[minhaSala].jogadores = salas[minhaSala].jogadores.filter(p => p.id !== socket.id);
-            if (salas[minhaSala].jogadores.length === 0) {
+            const s = salas[minhaSala];
+            const jogadorSaiu = s.jogadores.find(p => p.id === socket.id);
+            
+            // Remove o jogador
+            s.jogadores = s.jogadores.filter(p => p.id !== socket.id);
+
+            if (s.jogadores.length === 0) {
+                // Se a sala ficou vazia, apaga a sala
                 delete salas[minhaSala];
+            } else if (s.rodando) {
+                // Se o jogo estava rodando, encerra a partida por abandono para evitar bugs
+                finalizarJogo(
+                    minhaSala, 
+                    "🚨 PARTIDA CANCELADA", 
+                    `O jogador ${jogadorSaiu ? jogadorSaiu.nome : 'Desconhecido'} abandonou a partida.`
+                );
             } else {
-                io.to(minhaSala).emit('estadoLobby', { rodando: salas[minhaSala].rodando, jogadoresInfo: salas[minhaSala].jogadores });
+                // Se estava no lobby, só avisa quem ficou
+                io.to(minhaSala).emit('estadoLobby', { rodando: s.rodando, jogadoresInfo: s.jogadores });
             }
         }
     });
