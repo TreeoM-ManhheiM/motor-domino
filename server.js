@@ -4,11 +4,12 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*", methods: ["GET", "POST"] } 
+});
 
 let salas = {};
 
-// Gera as 28 peças do dominó e embaralha
 function criarDominos() {
     let pecas = [];
     for (let i = 0; i <= 6; i++) {
@@ -17,7 +18,6 @@ function criarDominos() {
     return pecas.sort(() => Math.random() - 0.5);
 }
 
-// Soma o total de pontos na mão de um jogador
 function somarPontos(mao) {
     return mao.reduce((acc, p) => acc + p[0] + p[1], 0);
 }
@@ -31,7 +31,6 @@ io.on('connection', (socket) => {
         if (!salas[sala]) {
             salas[sala] = { jogadores: [], rodando: false, mesa: [], monte: [], turno: 0 };
         }
-        // Limite de 4 jogadores por sala
         if (salas[sala].jogadores.length < 4 && !salas[sala].rodando) {
             salas[sala].jogadores.push({ id: socket.id, nome: apelido, mao: [] });
             io.to(sala).emit('estadoLobby', { rodando: false, jogadoresInfo: salas[sala].jogadores });
@@ -41,18 +40,14 @@ io.on('connection', (socket) => {
     socket.on('marcarPronto', () => {
         const s = salas[minhaSala];
         if (!s || s.rodando) return;
-        
         s.rodando = true;
         s.monte = criarDominos();
         s.mesa = [];
         s.turno = 0;
-
-        // Regra de Distribuição: 7 peças para cada (1x1, 1x1x1 ou 2x2)
         s.jogadores.forEach(j => {
             j.mao = s.monte.splice(0, 7);
             io.to(j.id).emit('atualizarMao', j.mao);
         });
-
         io.to(minhaSala).emit('jogoIniciado');
         io.to(minhaSala).emit('atualizarMesa', s.mesa);
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
@@ -67,7 +62,6 @@ io.on('connection', (socket) => {
         let jogador = s.jogadores[jIdx];
         let peca = [...jogador.mao[index]];
 
-        // LÓGICA DE ENCAIXE E GIRO AUTOMÁTICO
         if (s.mesa.length === 0) {
             s.mesa.push(peca);
         } else {
@@ -75,41 +69,38 @@ io.on('connection', (socket) => {
                 let pEsq = s.mesa[0][0];
                 if (peca[1] === pEsq) s.mesa.unshift(peca);
                 else if (peca[0] === pEsq) s.mesa.unshift(peca.reverse());
-                else return socket.emit('erro', "Não encaixa na esquerda!");
+                else return socket.emit('erro', "Não encaixa!");
             } else {
                 let pDir = s.mesa[s.mesa.length - 1][1];
                 if (peca[0] === pDir) s.mesa.push(peca);
                 else if (peca[1] === pDir) s.mesa.push(peca.reverse());
-                else return socket.emit('erro', "Não encaixa na direita!");
+                else return socket.emit('erro', "Não encaixa!");
             }
         }
 
-        // Remove a peça da mão e atualiza mesa
         jogador.mao.splice(index, 1);
         socket.emit('atualizarMao', jogador.mao);
         io.to(minhaSala).emit('atualizarMesa', s.mesa);
 
-        // REGRA DE FINAL DE PARTIDA (BATIDA)
         if (jogador.mao.length === 0) {
             let resumo = s.jogadores.map(jog => `${jog.nome}: ${somarPontos(jog.mao)} pts`).join('\n');
-            io.to(minhaSala).emit('mensagemGeral', `🏆 ${jogador.nome} BATEU!\n\nPontos restantes:\n${resumo}`);
+            io.to(minhaSala).emit('mensagemGeral', `🏆 ${jogador.nome} VENCEU!\n\nSobra:\n${resumo}`);
             delete salas[minhaSala];
             return io.to(minhaSala).emit('resetJogo');
         }
 
-        // Próximo turno
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
 
     socket.on('comprarPeca', () => {
         const s = salas[minhaSala];
-        if (!s || s.monte.length === 0) return socket.emit('erro', "O monte acabou!");
+        if (!s || s.monte.length === 0) return socket.emit('erro', "Sem peças!");
         const j = s.jogadores.find(p => p.id === socket.id);
-        if (s.jogadores.indexOf(j) !== s.turno) return;
-        
-        j.mao.push(s.monte.pop());
-        socket.emit('atualizarMao', j.mao);
+        if (s.jogadores.indexOf(j) === s.turno) {
+            j.mao.push(s.monte.pop());
+            socket.emit('atualizarMao', j.mao);
+        }
     });
 
     socket.on('passarVez', () => {
@@ -118,14 +109,6 @@ io.on('connection', (socket) => {
         s.turno = (s.turno + 1) % s.jogadores.length;
         io.to(minhaSala).emit('mudarTurno', { nome: s.jogadores[s.turno].nome });
     });
-
-    socket.on('disconnect', () => {
-        if (minhaSala && salas[minhaSala]) {
-            salas[minhaSala].jogadores = salas[minhaSala].jogadores.filter(p => p.id !== socket.id);
-            if (salas[minhaSala].jogadores.length === 0) delete salas[minhaSala];
-        }
-    });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+server.listen(process.env.PORT || 3000, () => console.log("Servidor ON"));
