@@ -297,14 +297,11 @@ io.on('connection', socket => {
         if (!jogador) return;
         console.log(`[TRUCO] Jogador ${jogador.nome} (${socket.id}) desconectou da sala ${nomeSala}.`);
         if (sala.estado === 'jogando') {
-            // Notifica os outros jogadores que alguém saiu durante a partida
             io.to(nomeSala).emit('jogadorSaiu', { nome: jogador.nome, mensagem: `${jogador.nome} saiu da partida.` });
-            // Reseta a sala para o estado de lobby
             sala.estado = 'aguardando';
             sala.jogadores.forEach(j => j.pronto = false);
             io.to(nomeSala).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
         }
-        // Remove o jogador da lista
         sala.jogadores = sala.jogadores.filter(j => j.id !== socket.id);
         if (sala.jogadores.length === 0) {
             delete salas[nomeSala];
