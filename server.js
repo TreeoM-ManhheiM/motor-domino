@@ -82,7 +82,8 @@ function verificarFimRodada(salaId) {
     const resultado = compararCartas(melhor.A.carta, melhor.B.carta, sala.vira);
     console.log(`[TRUCO] Resultado: ${resultado} -> ${resultado > 0 ? 'A vence' : (resultado < 0 ? 'B vence' : 'Empate')}`);
 
-    if (sala.rodadaAtual >= 3) {
+    // Proteção apenas para rodada EXTRA (4 ou mais) - NUNCA para a 3ª
+    if (sala.rodadaAtual > 3) {
         console.log(`[TRUCO] ⚠️ Rodada ${sala.rodadaAtual} excedeu limite! Forçando fim da mão.`);
         const vencedor = resultado > 0 ? 'A' : (resultado < 0 ? 'B' : (FORCA_NAIPE[melhor.A.carta.naipe] > FORCA_NAIPE[melhor.B.carta.naipe] ? 'A' : 'B'));
         finalizarMao(salaId, vencedor);
@@ -117,6 +118,7 @@ function verificarFimRodada(salaId) {
         return;
     }
 
+    // Não empatou: há um vencedor
     const equipeVencedora = resultado > 0 ? 'A' : 'B';
     sala.placarRodadas[equipeVencedora]++;
     sala.ultimoVencedorRodada = melhor[equipeVencedora].jogadorId;
@@ -128,11 +130,16 @@ function verificarFimRodada(salaId) {
     const pontosB = sala.placarRodadas.B;
     const rodadaAtual = sala.rodadaAtual;
 
+    // Condições de fim de mão
     if (pontosA >= 2 || pontosB >= 2) {
         console.log(`[TRUCO] Mão finalizada porque uma equipe atingiu 2 pontos.`);
         finalizarMao(salaId, equipeVencedora);
     } else if (rodadaAtual === 2 && (pontosA === 1 || pontosB === 1) && sala.primeiraRodadaEmpatou) {
         console.log(`[TRUCO] Mão finalizada: 1ª rodada empatou, 2ª rodada teve vencedor.`);
+        finalizarMao(salaId, equipeVencedora);
+    } else if (rodadaAtual === 3) {
+        // Na terceira rodada, se teve vencedor, a mão termina imediatamente
+        console.log(`[TRUCO] Terceira rodada com vencedor. Finalizando mão.`);
         finalizarMao(salaId, equipeVencedora);
     } else {
         iniciarRodada(salaId);
