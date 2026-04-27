@@ -3,6 +3,12 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const app = express();
+// 🔥 Serve arquivos estáticos (index.html, regras.html) na mesma origem
+app.use(express.static(__dirname));
+
+// (Opcional) Rota de teste para ver se o servidor está respondendo
+app.get('/ping', (req, res) => res.send('pong'));
+
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -66,8 +72,6 @@ io.on('connection', (socket) => {
         if (!s || !s.rodando) return;
         
         const jIdx = s.jogadores.findIndex(p => p.id === socket.id);
-        
-        // CORREÇÃO: Avisa se clicar fora da vez em vez de só travar
         if (s.turno !== jIdx) return socket.emit('erro', "Calma! Não é a sua vez de jogar.");
 
         let jogador = s.jogadores[jIdx];
