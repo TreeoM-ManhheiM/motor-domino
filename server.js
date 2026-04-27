@@ -1,312 +1,354 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dominó Lógico - Versão Organizada</title>
 
-const app = express();
-app.use(cors());
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
-const NAIPES = ['paus', 'copas', 'espadas', 'ouros'];
-const VALORES = ['4', '5', '6', '7', 'Q', 'J', 'K', 'A', '2', '3'];
-const PONTOS_PARA_VENCER = 12;
-const VALORES_APOSTA = [1, 3, 6, 9, 12];
-
-const FORCA_CARTA = { '4':1,'5':2,'6':3,'7':4,'Q':5,'J':6,'K':7,'A':8,'2':9,'3':10 };
-const FORCA_NAIPE = { 'paus':4, 'copas':3, 'espadas':2, 'ouros':1 };
-
-const MANILHA_POR_VIRA = {
-    '4': '5', '5': '6', '6': '7', '7': 'Q', 'Q': 'J',
-    'J': 'K', 'K': 'A', 'A': '2', '2': '3', '3': '4'
-};
-
-let salas = {};
-
-function criarBaralho() {
-    let baralho = [];
-    NAIPES.forEach(n => VALORES.forEach(v => baralho.push({ naipe: n, valor: v })));
-    return embaralhar(baralho);
-}
-function embaralhar(baralho) {
-    for (let i = baralho.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [baralho[i], baralho[j]] = [baralho[j], baralho[i]];
-    }
-    return baralho;
-}
-
-function getForcaCarta(carta, vira) {
-    const valorManilha = MANILHA_POR_VIRA[vira.valor];
-    const valorCarta = carta.valor;
-    const naipeCarta = carta.naipe;
-    
-    if (valorCarta === valorManilha) {
-        return 100 + FORCA_NAIPE[naipeCarta];
-    } else {
-        return FORCA_CARTA[valorCarta];
-    }
-}
-
-function compararCartas(carta1, carta2, vira) {
-    const f1 = getForcaCarta(carta1, vira);
-    const f2 = getForcaCarta(carta2, vira);
-    console.log(`[DEBUG] Força ${carta1.valor}${carta1.naipe}=${f1} vs ${carta2.valor}${carta2.naipe}=${f2}`);
-    return f1 - f2;
-}
-
-function passarVez(salaId) {
-    const sala = salas[salaId];
-    let idx = sala.ordemJogadores.indexOf(sala.jogadorAtual);
-    let prox = (idx + 1) % sala.ordemJogadores.length;
-    sala.jogadorAtual = sala.ordemJogadores[prox];
-    io.to(salaId).emit('atualizarVez', { jogadorId: sala.jogadorAtual });
-}
-
-function verificarFimRodada(salaId) {
-    const sala = salas[salaId];
-    if (sala.cartasNaMesa.length < sala.ordemJogadores.length) {
-        passarVez(salaId);
-        return;
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #0f172a;
+      color: white;
+      text-align: center;
+      overflow-x: hidden;
     }
 
-    console.log(`[TRUCO] Rodada ${sala.rodadaAtual} - Vira: ${sala.vira.valor}${sala.vira.naipe}`);
+    #mesa {
+      background: #14532d;
+      min-height: 400px;
+      border-radius: 20px;
+      border: 10px solid #3e2723;
+      box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin: 20px auto;
+      max-width: 95%;
+      padding: 30px;
+      transition: all 0.3s ease;
+    }
 
-    let melhor = { A: null, B: null };
-    sala.cartasNaMesa.forEach(j => {
-        let atual = melhor[j.equipe];
-        if (!atual || compararCartas(j.carta, atual.carta, sala.vira) > 0)
-            melhor[j.equipe] = j;
+    .peca {
+      background: #fdf6e3;
+      color: #1a1a1a;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 0 #b5ae9a, 0 6px 10px rgba(0,0,0,0.3);
+      transition: transform 0.2s;
+      user-select: none;
+    }
+    .peca:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 8px 0 #b5ae9a;
+    }
+    .p-horiz { width: 70px; height: 35px; flex-direction: row; }
+    .p-vert  { width: 35px; height: 70px; flex-direction: column; }
+    .valor { flex: 1; display: flex; justify-content: center; align-items: center; }
+    .linha { background: #d1d5db; }
+    .p-horiz .linha { width: 2px; height: 80%; }
+    .p-vert .linha  { width: 80%; height: 2px; }
+
+    #mao {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 20px;
+      padding: 10px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 15px;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 16px;
+      box-shadow: 0 4px #1d4ed8;
+    }
+    button:active {
+      transform: translateY(2px);
+      box-shadow: 0 2px #1d4ed8;
+    }
+    button:disabled {
+      background: #64748b;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+
+    #modal-escolha {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.85);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-box {
+      background: #1e293b;
+      padding: 30px;
+      border-radius: 20px;
+      border: 3px solid #3b82f6;
+      box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
+    }
+    .btn-escolha { margin: 10px; padding: 20px 40px; font-size: 20px; }
+
+    /* PRIVACIDADE: BORRÃO NA MÃO */
+    #mao.mao-borrada .peca {
+      filter: blur(10px);
+      transition: filter 0.15s ease;
+      opacity: 0.85;
+      pointer-events: none;
+    }
+
+    #dica-privacidade {
+      font-size: 13px;
+      opacity: 0.85;
+      margin-top: -5px;
+      margin-bottom: 10px;
+    }
+
+    /* Status de conexão */
+    #status-conexao {
+      font-size: 1.2em;
+      margin: 15px 0;
+      padding: 10px 25px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.1);
+      display: inline-block;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="modal-escolha">
+    <div class="modal-box">
+      <h2 style="margin-bottom: 25px;">Escolha o lado da jogada</h2>
+      <button class="btn-escolha" style="background: #10b981;" onclick="window.confirmarJogada('esq')">⬅️ ESQUERDA</button>
+      <button class="btn-escolha" style="background: #3b82f6;" onclick="window.confirmarJogada('dir')">DIREITA ➡️</button>
+    </div>
+  </div>
+
+  <div id="lobby">
+    <h1 style="color: #60a5fa;">Dominó Lógico 🧠</h1>
+
+    <!-- Indicador de conexão -->
+    <div id="status-conexao">🔄 Conectando ao servidor...</div>
+
+    <div id="controles-login">
+      <input type="text" id="nick" placeholder="Seu Nome" disabled
+             style="padding: 12px; border-radius: 8px; border: none; margin: 5px;" />
+      <input type="text" id="sala" placeholder="Nome da Sala" disabled
+             style="padding: 12px; border-radius: 8px; border: none; margin: 5px;" />
+      <button onclick="window.entrar()" disabled>ENTRAR NO JOGO</button>
+    </div>
+
+    <div id="espera" style="display:none">
+      <h3>Jogadores na Sala:</h3>
+      <ul id="lista" style="list-style: none; padding: 0; font-size: 1.2em;"></ul>
+      <button id="btnIni" onclick="window.clicarPronto()" disabled>ESTOU PRONTO!</button>
+    </div>
+  </div>
+
+  <div id="jogo" style="display:none">
+    <div style="background: rgba(0,0,0,0.3); padding: 10px; font-size: 1.2em; font-weight: bold;" id="turno">
+      Aguardando...
+    </div>
+
+    <div id="mesa"></div>
+
+    <div id="dica-privacidade">Dica: esconda suas peças quando não for sua vez 👀</div>
+
+    <div id="mao"></div>
+
+    <div style="margin-bottom: 30px;">
+      <button onclick="socket.emit('comprarPeca')" style="background: #f59e0b; box-shadow: 0 4px #b45309;">
+        COMPRAR
+      </button>
+
+      <button onclick="socket.emit('passarVez')" style="background: #ef4444; box-shadow: 0 4px #b91c1c;">
+        PASSAR VEZ
+      </button>
+
+      <button id="btnPrivacidade"
+              onclick="window.togglePrivacidade()"
+              style="background:#64748b; box-shadow:0 4px #334155; margin-left:10px;">
+        👁️ Mostrar Peças
+      </button>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+  <script>
+    // Conexão otimizada para cold start do Render
+    const socket = io({
+      transports: ["polling", "websocket"],  // polling primeiro para acordar o servidor
+      reconnection: true,
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 30000
     });
 
-    const resultado = compararCartas(melhor.A.carta, melhor.B.carta, sala.vira);
-    console.log(`[TRUCO] Resultado: ${resultado} -> ${resultado > 0 ? 'A vence' : (resultado < 0 ? 'B vence' : 'Empate')}`);
+    // Elementos do status
+    const statusEl = document.getElementById('status-conexao');
+    const inputs = document.querySelectorAll('#controles-login input');
+    const btnEntrar = document.querySelector('#controles-login button');
 
-    if (resultado === 0) {
-        console.log(`[TRUCO] Empate na rodada ${sala.rodadaAtual}`);
-        if (sala.rodadaAtual === 2 && (sala.placarRodadas.A === 1 || sala.placarRodadas.B === 1)) {
-            const equipeVencedora = sala.placarRodadas.A === 1 ? 'A' : 'B';
-            console.log(`[TRUCO] Empate na 2ª rodada com placar 1x0. Vitória da equipe ${equipeVencedora}.`);
-            finalizarMao(salaId, equipeVencedora);
-            return;
-        }
-        if (sala.rodadaAtual === 1) {
-            sala.primeiraRodadaEmpatou = true;
-            console.log(`[TRUCO] Flag primeiraRodadaEmpatou = TRUE`);
-        }
-        if (sala.rodadaAtual === 3) {
-            const nA = melhor.A.carta.naipe;
-            const nB = melhor.B.carta.naipe;
-            const vencedor = FORCA_NAIPE[nA] > FORCA_NAIPE[nB] ? 'A' : 'B';
-            console.log(`[TRUCO] Desempate 3ª rodada por naipe: ${vencedor}`);
-            sala.placarRodadas[vencedor]++;
-            sala.ultimoVencedorRodada = melhor[vencedor].jogadorId;
-            io.to(salaId).emit('atualizarPlacarRodadas', { rodadasA: sala.placarRodadas.A, rodadasB: sala.placarRodadas.B });
-            finalizarMao(salaId, vencedor);
-        } else {
-            sala.ultimoVencedorRodada = sala.cartasNaMesa[sala.cartasNaMesa.length-1].jogadorId;
-            iniciarRodada(salaId);
-        }
-        return;
+    socket.on('connect', () => {
+      statusEl.innerHTML = '✅ Conectado ao servidor';
+      statusEl.style.background = 'rgba(16, 185, 129, 0.2)';
+      inputs.forEach(i => i.disabled = false);
+      btnEntrar.disabled = false;
+    });
+
+    socket.on('disconnect', () => {
+      statusEl.innerHTML = '❌ Conexão perdida. Reconectando...';
+      statusEl.style.background = 'rgba(239, 68, 68, 0.2)';
+      inputs.forEach(i => i.disabled = true);
+      btnEntrar.disabled = true;
+    });
+
+    socket.on('reconnect_attempt', (attempt) => {
+      statusEl.innerHTML = `🔄 Aguardando servidor acordar... (tentativa ${attempt})`;
+      statusEl.style.background = 'rgba(251, 191, 36, 0.2)';
+    });
+
+    socket.on('connect_error', () => {
+      statusEl.innerHTML = '🔄 Aguardando servidor (Render cold start)...';
+      statusEl.style.background = 'rgba(251, 191, 36, 0.2)';
+    });
+
+    // ===== LÓGICA DO JOGO =====
+    let meuNome = "", mesaAtu = [], maoAtu = [], jogadaPendente = null;
+    let maoBorrada = true;
+
+    function aplicarPrivacidade() {
+      const maoEl = document.getElementById('mao');
+      const btn = document.getElementById('btnPrivacidade');
+      if (!maoEl) return;
+
+      if (maoBorrada) {
+        maoEl.classList.add('mao-borrada');
+        if (btn) btn.innerText = "👁️ Mostrar Peças";
+      } else {
+        maoEl.classList.remove('mao-borrada');
+        if (btn) btn.innerText = "🔒 Esconder Peças";
+      }
     }
 
-    // Não empatou: há um vencedor
-    const equipeVencedora = resultado > 0 ? 'A' : 'B';
-    sala.placarRodadas[equipeVencedora]++;
-    sala.ultimoVencedorRodada = melhor[equipeVencedora].jogadorId;
-    console.log(`[TRUCO] Vencedor da rodada: ${equipeVencedora}. Placar de rodadas: ${sala.placarRodadas.A}x${sala.placarRodadas.B}`);
+    window.togglePrivacidade = () => {
+      maoBorrada = !maoBorrada;
+      aplicarPrivacidade();
+    };
 
-    io.to(salaId).emit('atualizarPlacarRodadas', { rodadasA: sala.placarRodadas.A, rodadasB: sala.placarRodadas.B });
+    window.entrar = () => {
+      meuNome = document.getElementById('nick').value;
+      if (!meuNome) return alert("Digite seu nome!");
 
-    const pontosA = sala.placarRodadas.A;
-    const pontosB = sala.placarRodadas.B;
-    const rodadaAtual = sala.rodadaAtual;
+      socket.emit('entrarSala', {
+        apelido: meuNome,
+        sala: document.getElementById('sala').value || "Geral"
+      });
 
-    if (pontosA >= 2 || pontosB >= 2) {
-        console.log(`[TRUCO] Mão finalizada porque uma equipe atingiu 2 pontos.`);
-        finalizarMao(salaId, equipeVencedora);
-    } else if (rodadaAtual === 2 && (pontosA === 1 || pontosB === 1) && sala.primeiraRodadaEmpatou) {
-        console.log(`[TRUCO] Mão finalizada: 1ª rodada empatou, 2ª rodada teve vencedor.`);
-        finalizarMao(salaId, equipeVencedora);
-    } else if (rodadaAtual === 3) {
-        console.log(`[TRUCO] Terceira rodada com vencedor. Finalizando mão.`);
-        finalizarMao(salaId, equipeVencedora);
-    } else {
-        iniciarRodada(salaId);
-    }
-}
+      document.getElementById('controles-login').style.display = 'none';
+    };
 
-function iniciarRodada(salaId) {
-    const sala = salas[salaId];
-    sala.rodadaAtual++;
-    sala.cartasNaMesa = [];
-    if (sala.rodadaAtual === 1) {
-        sala.jogadorAtual = sala.ordemJogadores[sala.jogadorQueIniciaProximaMao];
-    } else {
-        sala.jogadorAtual = sala.ultimoVencedorRodada;
-    }
-    console.log(`[TRUCO] Iniciando rodada ${sala.rodadaAtual}. Vez de ${sala.jogadorAtual}`);
-    io.to(salaId).emit('novaRodada', { rodada: sala.rodadaAtual });
-    io.to(salaId).emit('atualizarVez', { jogadorId: sala.jogadorAtual });
-}
+    window.clicarPronto = () => {
+      socket.emit('marcarPronto');
+      document.getElementById('btnIni').innerText = "AGUARDANDO...";
+      document.getElementById('btnIni').disabled = true;
+    };
 
-function finalizarMao(salaId, equipeVencedora) {
-    const sala = salas[salaId];
-    let pontos = sala.apostaAtual;
-    sala.pontuacao[equipeVencedora] += pontos;
-    console.log(`[TRUCO] 🏆 Fim da mão! Equipe ${equipeVencedora} ganhou ${pontos} ponto(s). Total: ${sala.pontuacao.A}x${sala.pontuacao.B}`);
-    io.to(salaId).emit('fimDeMao', { pontuacao: sala.pontuacao, vencedorMao: equipeVencedora, pontosGanhos: pontos });
+    window.jogar = (idx) => {
+      if (maoBorrada) return;
 
-    if (sala.pontuacao[equipeVencedora] >= PONTOS_PARA_VENCER) {
-        io.to(salaId).emit('fimDeJogo', { vencedor: equipeVencedora, pontuacao: sala.pontuacao });
-        sala.estado = 'aguardando';
-        sala.jogadores.forEach(j => j.pronto = false);
-        io.to(salaId).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
-    } else {
-        sala.jogadorQueIniciaProximaMao = (sala.jogadorQueIniciaProximaMao + 1) % sala.ordemJogadores.length;
-        iniciarNovaMao(salaId);
-    }
-}
+      const p = maoAtu[idx];
+      if (mesaAtu.length === 0) return socket.emit('jogarPeca', { index: idx, lado: 'dir' });
 
-function iniciarNovaMao(salaId) {
-    const sala = salas[salaId];
-    sala.baralho = criarBaralho();
-    sala.vira = sala.baralho.pop();
-    sala.maos = {};
-    sala.jogadores.forEach(j => sala.maos[j.id] = [sala.baralho.pop(), sala.baralho.pop(), sala.baralho.pop()]);
-    sala.rodadaAtual = 0;
-    sala.cartasNaMesa = [];
-    sala.apostaAtual = 1;
-    sala.placarRodadas = { A:0, B:0 };
-    sala.ultimoVencedorRodada = null;
-    sala.ordemJogadores = sala.jogadores.map(j => j.id);
-    sala.truco = { pendente: false, desafiante: null, desafiado: null, valorProposto: 3 };
-    sala.primeiraRodadaEmpatou = false;
-    if (sala.jogadorQueIniciaProximaMao === undefined) sala.jogadorQueIniciaProximaMao = 0;
+      const e = mesaAtu[0][0];
+      const d = mesaAtu[mesaAtu.length - 1][1];
+      const serveEsq = (p[0] === e || p[1] === e);
+      const serveDir = (p[0] === d || p[1] === d);
 
-    sala.jogadores.forEach(j => {
-        io.to(j.id).emit('iniciarMao', {
-            cartas: sala.maos[j.id],
-            vira: sala.vira,
-            pontuacao: sala.pontuacao,
-            equipe: j.equipe
-        });
+      if (serveEsq && serveDir && e !== d) {
+        jogadaPendente = idx;
+        document.getElementById('modal-escolha').style.display = 'flex';
+      } else if (serveEsq) {
+        socket.emit('jogarPeca', { index: idx, lado: 'esq' });
+      } else if (serveDir) {
+        socket.emit('jogarPeca', { index: idx, lado: 'dir' });
+      } else {
+        alert("Essa peça não encaixa em nenhuma das pontas!");
+      }
+    };
+
+    window.confirmarJogada = (lado) => {
+      socket.emit('jogarPeca', { index: jogadaPendente, lado: lado });
+      document.getElementById('modal-escolha').style.display = 'none';
+    };
+
+    socket.on('estadoLobby', d => {
+      document.getElementById('espera').style.display = 'block';
+      document.getElementById('lista').innerHTML = d.jogadoresInfo
+        .map(j => `<li>${j.pronto ? '✅' : '⏳'} ${j.nome}</li>`)
+        .join('');
+
+      if (d.jogadoresInfo.length >= 2) document.getElementById('btnIni').disabled = false;
     });
-    iniciarRodada(salaId);
-    io.to(salaId).emit('atualizarAposta', { aposta: 1 });
-}
 
-// ---------- TRUCO ----------
-function pedirTruco(salaId, socketId) {
-    const sala = salas[salaId];
-    if (!sala || sala.estado !== 'jogando') return;
-    const jogador = sala.jogadores.find(j => j.id === socketId);
-    if (!jogador) return;
-    if (sala.truco.pendente) { io.to(socketId).emit('erro', 'Já existe truco pendente'); return; }
-    const idx = VALORES_APOSTA.indexOf(sala.apostaAtual);
-    if (idx === VALORES_APOSTA.length-1) return;
-    const proximo = VALORES_APOSTA[idx+1];
-    const adversarios = sala.jogadores.filter(j => j.equipe !== jogador.equipe);
-    sala.truco = { pendente: true, desafiante: jogador.equipe, desafiado: adversarios.map(a=>a.id), valorProposto: proximo };
-    adversarios.forEach(a => io.to(a.id).emit('trucoPedido', { valor: proximo, de: jogador.nome }));
-    io.to(socketId).emit('trucoPedidoEnviado', { valor: proximo });
-}
+    socket.on('jogoIniciado', () => {
+      document.getElementById('lobby').style.display = 'none';
+      document.getElementById('jogo').style.display = 'block';
+      maoBorrada = true;
+      aplicarPrivacidade();
+    });
 
-function responderTruco(salaId, socketId, aceitou, aumentar) {
-    const sala = salas[salaId];
-    if (!sala || !sala.truco.pendente) return;
-    const jogador = sala.jogadores.find(j => j.id === socketId);
-    if (!jogador) return;
-    if (jogador.equipe === sala.truco.desafiante) { io.to(socketId).emit('erro', 'Resposta é do adversário'); return; }
-    const desafiante = sala.truco.desafiante;
-    const valor = sala.truco.valorProposto;
+    socket.on('atualizarMesa', m => {
+      mesaAtu = m;
+      document.getElementById('mesa').innerHTML = m.map(p => `
+        <div class="peca ${p[0] === p[1] ? 'p-vert' : 'p-horiz'}">
+          <div class="valor">${p[0]}</div>
+          <div class="linha"></div>
+          <div class="valor">${p[1]}</div>
+        </div>`).join('');
+    });
 
-    if (aceitou) {
-        sala.apostaAtual = valor;
-        sala.truco = { pendente: false, desafiante: null, desafiado: null, valorProposto: 0 };
-        io.to(salaId).emit('trucoAceito', { novaAposta: valor });
-        io.to(salaId).emit('atualizarAposta', { aposta: valor });
-    } else if (aumentar) {
-        sala.apostaAtual = valor;
-        const idx = VALORES_APOSTA.indexOf(valor);
-        if (idx === VALORES_APOSTA.length-1) return;
-        const novo = VALORES_APOSTA[idx+1];
-        const adversarios = sala.jogadores.filter(j => j.equipe !== jogador.equipe);
-        sala.truco = { pendente: true, desafiante: jogador.equipe, desafiado: adversarios.map(a=>a.id), valorProposto: novo };
-        io.to(salaId).emit('trucoAumentado', { de: jogador.nome, valor: novo });
-        io.to(salaId).emit('atualizarAposta', { aposta: sala.apostaAtual });
-        adversarios.forEach(a => io.to(a.id).emit('trucoPedido', { valor: novo, de: jogador.nome }));
-    } else {
-        sala.truco = { pendente: false, desafiante: null, desafiado: null, valorProposto: 0 };
-        finalizarMao(salaId, desafiante);
-    }
-}
+    socket.on('atualizarMao', m => {
+      maoAtu = m;
+      document.getElementById('mao').innerHTML = m.map((p, i) => `
+        <div class="peca ${p[0] === p[1] ? 'p-vert' : 'p-horiz'}" onclick="window.jogar(${i})">
+          <div class="valor">${p[0]}</div>
+          <div class="linha"></div>
+          <div class="valor">${p[1]}</div>
+        </div>`).join('');
 
-// ---------- Socket ----------
-io.on('connection', socket => {
-    console.log('🃏', socket.id);
-    socket.on('entrarSala', ({ apelido, sala: nome, modo }) => {
-        socket.join(nome); socket.sala = nome; socket.apelido = apelido;
-        if (!salas[nome]) salas[nome] = { jogadores:[], espectadores:[], modo: modo||'1x1', estado:'aguardando', pontuacao:{A:0,B:0}, jogadorQueIniciaProximaMao:0 };
-        const sala = salas[nome];
-        const cap = sala.modo==='2x2'?4:2;
-        if (sala.jogadores.length >= cap) return socket.emit('erro','Sala cheia');
-        const equipe = (sala.jogadores.filter(j=>j.equipe==='A').length <= sala.jogadores.filter(j=>j.equipe==='B').length) ? 'A':'B';
-        sala.jogadores.push({ id:socket.id, nome:apelido, equipe, pronto:false });
-        io.to(nome).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
+      aplicarPrivacidade();
     });
-    socket.on('marcarPronto', () => {
-        const sala = salas[socket.sala]; if (!sala) return;
-        const jog = sala.jogadores.find(j=>j.id===socket.id); if (jog) jog.pronto = true;
-        io.to(socket.sala).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
-        const cap = sala.modo==='2x2'?4:2;
-        if (sala.jogadores.length === cap && sala.jogadores.every(j=>j.pronto) && sala.estado==='aguardando') {
-            sala.estado = 'jogando'; sala.pontuacao = {A:0,B:0};
-            io.to(socket.sala).emit('jogoIniciado');
-            iniciarNovaMao(socket.sala);
-        }
-    });
-    socket.on('jogarCarta', carta => {
-        const sala = salas[socket.sala]; if (!sala || sala.estado!=='jogando') return;
-        if (sala.jogadorAtual !== socket.id) return socket.emit('erro','Não é sua vez');
-        const jog = sala.jogadores.find(j=>j.id===socket.id);
-        const mao = sala.maos[jog.id];
-        const idx = mao.findIndex(c=>c.naipe===carta.naipe && c.valor===carta.valor);
-        if (idx===-1) return socket.emit('erro','Carta inválida');
-        mao.splice(idx,1);
-        sala.cartasNaMesa.push({ jogadorId: jog.id, equipe: jog.equipe, carta });
-        io.to(socket.sala).emit('cartaJogada', { jogadorId: jog.id, carta, equipe: jog.equipe });
-        if (sala.cartasNaMesa.length === sala.ordemJogadores.length) verificarFimRodada(socket.sala);
-        else passarVez(socket.sala);
-    });
-    socket.on('pedirTruco', ()=>pedirTruco(socket.sala, socket.id));
-    socket.on('responderTruco', ({aceitou, aumentar})=>responderTruco(socket.sala, socket.id, aceitou, aumentar||false));
-    socket.on('desistir', ()=>{
-        const sala = salas[socket.sala]; if (!sala) return;
-        const jog = sala.jogadores.find(j=>j.id===socket.id);
-        if (jog) finalizarMao(socket.sala, jog.equipe==='A'?'B':'A');
-    });
-    socket.on('disconnect', ()=>{
-        const nomeSala = socket.sala;
-        if (!nomeSala || !salas[nomeSala]) return;
-        const sala = salas[nomeSala];
-        const jogador = sala.jogadores.find(j => j.id === socket.id);
-        if (!jogador) return;
-        console.log(`[TRUCO] Jogador ${jogador.nome} (${socket.id}) desconectou da sala ${nomeSala}.`);
-        if (sala.estado === 'jogando') {
-            io.to(nomeSala).emit('jogadorSaiu', { nome: jogador.nome, mensagem: `${jogador.nome} saiu da partida.` });
-            sala.estado = 'aguardando';
-            sala.jogadores.forEach(j => j.pronto = false);
-            io.to(nomeSala).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
-        }
-        sala.jogadores = sala.jogadores.filter(j => j.id !== socket.id);
-        if (sala.jogadores.length === 0) {
-            delete salas[nomeSala];
-            console.log(`[TRUCO] Sala ${nomeSala} removida.`);
-        } else {
-            io.to(nomeSala).emit('atualizarLobby', { jogadores: sala.jogadores, modo: sala.modo, estado: sala.estado });
-        }
-    });
-});
 
-server.listen(process.env.PORT || 3000, ()=>console.log('Truco no ar'));
+    socket.on('mudarTurno', d => {
+      const t = document.getElementById('turno');
+      t.innerText = d.nome === meuNome ? "⭐ SUA VEZ DE JOGAR! ⭐" : "Vez de: " + d.nome;
+      t.style.color = d.nome === meuNome ? "#fbbf24" : "white";
+    });
+
+    socket.on('mensagemGeral', m => alert(m));
+    socket.on('resetJogo', () => setTimeout(() => location.reload(), 3000));
+    socket.on('erro', e => alert(e));
+  </script>
+</body>
+</html>
